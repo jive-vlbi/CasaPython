@@ -18,8 +18,7 @@ class ClosureTool(object):
         self.timeq = "SCAN_NUMBER={}".format(self.scan)
         self.antennas = sorted(ffd.actual_antennas(self.msname, self.timeq).keys())
         self.antenna_map = utils.get_antenna_map(msname)
-        startrow = 0
-        self.anffd = ffd.FFData.make_FFD(msname, self.antennas, startrow, 
+        self.anffd = ffd.FFData.make_FFD(msname, self.antennas,
                                          self.pol_id, self.polind, self.timeq,
                                          datacol="CORRECTED_DATA", solint=3000)
     def closures(self, n1, n2, n3):

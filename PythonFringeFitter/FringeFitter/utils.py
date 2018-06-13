@@ -4,7 +4,6 @@ import numpy as np, math
 import lsqrs
 import tasks
 
-
 tb = casac.table()
 qa = casac.quanta()
 
@@ -15,9 +14,6 @@ def get_antenna_map(msname, name_col='NAME'):
     tb.open("{}::ANTENNA".format(msname))
     # name_col = 'STATION'
     return dict((s, i) for (i,s) in enumerate(tb.getcol(name_col)))
-
-def invert_map(d):
-    return dict((v,k) for (k,v) in d.iteritems())
 
 def get_nchans(vis):
     tb.open(vis)
@@ -68,9 +64,9 @@ def size_bl(msname, i, j, constraint='True'):
 def total_perspective_vortex(msname, antennas, constraint='True'):
     n = len(antennas)
     w = np.zeros((n, n), np.float)
-    index_thing = zip(lsqrs.triangle(n), lsqrs.triangle_l(antennas))
+    index_thing = zip(bli.triangle(n), bli.triangle_l(antennas))
     for ((ai, aj), (i, j)) in index_thing:
-        si, sj = lsqrs.ij(i, j)
+        si, sj = bli.ij(i, j)
         w[ai, aj]  =  np.float(size_bl(msname, si, sj, constraint))
     w /= np.sum(w)
     w += np.transpose(w)
@@ -185,5 +181,3 @@ You'd think it would be hard to get this one wrong, but I established
 the hard way that it is at least possible."""
     return (((2*t + 1) % 2.0) - 1)*np.pi
 
-def invert_map(m):
-    return dict((b,a) for (a, b) in m.iteritems())

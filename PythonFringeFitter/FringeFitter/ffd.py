@@ -7,6 +7,7 @@ from numpy import fft
 from matplotlib import pyplot as plt
 # mine:
 import fringer, lsqrs, utils
+import bli
 import sys
 
 
@@ -131,57 +132,35 @@ def distinct_thing(msname, query, colname):
 def actual_source(msname):
     return distinct_thing('FIELD_ID', msname, "True")
 
-class BaselineIterator(object):
-    def __init__(self, antennas):
-        self.antenna_list = antennas
-        self.n_antennas = len(antennas)
-        self.baselines = lsqrs.triangle_l(self.antenna_list)
-        self.e_baselines = lsqrs.triangle_l(range(self.n_antennas))
-        self.ant_ind_map = dict(zip(self.antenna_list, range(self.n_antennas)))
-        self.ant_inv_map = utils.invert_map(self.ant_ind_map)
-    def p_to_e(self, p):
-        return self.ant_ind_map[p]
-    def e_to_p(self, e):
-        return self.ant_inv_map[e]
-    @staticmethod
-    def sort_e_index(i, j):
-        return (i, j) if i < j else (j, i)
-    def get_sign_and_indices(self, ref_antenna, p):
-        if (ref_antenna, p) in self.baselines:
-            sgn, ind = 1, self.baselines.index((ref_antenna, p))
-        elif (p, ref_antenna) in self.baselines:
-            sgn, ind = -1, self.baselines.index((p, ref_antenna))
-        else:
-            raise ValueError(
-                "No baseline {}--{}(=p) (baselines, {} antennas, {})".format(
-                    ref_antenna, p, self.baselines, self.antenna_list))
-        (i, j) = self.e_baselines[ind]
-        return sgn, (i, j)
-    def iter(self):
-        return iter(zip(self.baselines, self.e_baselines))
-    def iterate_e_baselines_to(self, ref_e_antenna):
-        for j in range(self.n_antennas):
-            if j == ref_e_antenna:
-                continue
-            else:
-                yield j
 
 class FFData(object):
     @staticmethod
-    def get_times(msname, solint, startrow, nrow, qrest):
-        query2 = 'SELECT DISTINCT INTERVAL FROM {} where {}'.format(
+    def checked_interval(msname, qrest):
+        tb.open(msname)
+        query2 = 'SELECT DISTINCT INTERVAL FROM {} WHERE {}'.format(
             msname, qrest)
         dts = tb.taql(query2).getcol('INTERVAL')
-        # casalog.post("{}".format(dts), "DEBUG")
-        [dt] = dts # equivalent to asserting that there is one element.
-        nrow = int(solint/dt)
-        q1 = 'SELECT DISTINCT TIME FROM ' + msname + ' where ' + qrest
-        casalog.post("Query {}".format(q1), "DEBUG")
+        if False:
+            casalog.post("{}".format(dts), "DEBUG")
+        # Check the list dts has only a single element: the
+        # following will raise a ValueError otherwise.
+        [dt] = dts 
+        return dt
+    @staticmethod
+    def get_global_times(msname, qrest, startrow):
+        """:param msname: The measurement set
+:param qrest: A TaQL query to select the data
+:param solint: the solution interval (in seconds)
+:param startrow: the row of the time array to start at.
+"""
+        dt = FFData.checked_interval(msname, qrest)
+        q1 = 'SELECT DISTINCT TIME FROM {} WHERE {}'.format(msname, qrest)
         times_t = tb.taql(q1)
-        casalog.post("Distinct times {}".format(times_t.nrows()),
-                     "DEBUG")
-        times = times_t.getcol('TIME', startrow=startrow, nrow=nrow)
-        return times
+        casalog.post("Query {}".format(q1), "DEBUG")
+        times = times_t.getcol('TIME')[startrow:]
+        (n_times,) = times.shape
+        casalog.post("Distinct times {}".format(n_times), "DEBUG")
+        return times, dt
     @staticmethod
     def get_freqs(msname, swid):
         tb.open(msname+"::SPECTRAL_WINDOW")
@@ -189,8 +168,8 @@ class FFData(object):
         ref_freq = tb.getcol('REF_FREQUENCY')[swid]
         (n_freqs,) = freqs.shape
         dfreqs = freqs - freqs[0]
-        #Patch to reproduce off by 1:
-        #freqs = freqs[0] + dfreqs * (n_freqs+1)/n_freqs
+        # Patch to reproduce off by 1:
+        # freqs = freqs[0] + dfreqs * (n_freqs+1)/n_freqs
         # Ends here
         dfs = tb.getcol('CHAN_WIDTH')[:, swid]
         dfreq = dfs[0]
@@ -207,6 +186,9 @@ class FFData(object):
         assert utils.allequal(dfs)
         df = dfs[0, 0]
         min_chan_freq = min(chanfreqs[0])
+        # This is quite opinionated. It may be that *within* an SPW all
+        # channels have the same width but still not the case that
+        # consecutive SPWs match up.
         freqs = min_chan_freq + df*np.arange(n_freqs)
         offsets = ((chanfreqs[0] - min_chan_freq)/df).astype(int)
         return freqs, n_chanfreqs, n_freqs, df, offsets, ref_freq
@@ -228,23 +210,7 @@ class FFData(object):
         t = tb.query('POLARIZATION_ID={}'.format(pol_id))
         sw_to_dd = dict(zip(t.getcol('SPECTRAL_WINDOW_ID'), t.rownumbers()))
         return sw_to_dd
-    @staticmethod
-    def get_global_times(msname, qrest, solint, startrow=0):
-        tb.open(msname)
-        query2 = 'SELECT DISTINCT INTERVAL FROM {} WHERE {}'.format(
-            msname, qrest)
-        dts = tb.taql(query2).getcol('INTERVAL')
-        # casalog.post("{}".format(dts), "DEBUG")
-        [dt] = dts # equivalent to asserting that there is one element.
-        nrow = int(solint/dt)
-        q1 = 'SELECT DISTINCT TIME FROM {} WHERE {}'.format(msname, qrest)
-        times_t = tb.taql(q1)
-        casalog.post("Query {}".format(q1), "DEBUG")
-        casalog.post("Distinct times {}".format(times_t.nrows()), "DEBUG")
-        times = times_t.getcol('TIME', startrow=startrow, nrow=nrow)
-        (n_times,) = times.shape
-        return times, n_times, nrow, dt
-    # Eventually and belatedly I had a thort that
+    # Eventually and belatedly I had a thought that
     # (1) it's reasonable to have a data-class for the data itself,
     # which ffd is,
     # (2) we could derive subclasses for filling them or even
@@ -254,13 +220,26 @@ class FFData(object):
     #
     # Sadly, though, it currently is how it is.
     @staticmethod
-    def make_FFD(msname, antenna_list, swid, pol_id, polind, qrest, startrow=0,
-                solint=120, datacol="DATA"):
+    def make_FFD(msname, antenna_list, swid, pol_id, polind, qrest, 
+                 datacol="DATA", solint=120):
+        """
+:param msname: the Measurement Set
+:param antenna_list: the list of antenna IDs
+:param swid: the spectral window ID
+:param polind: the polarization index
+:param qrest: *part* of a TaQL query, suitable for inserting after a WHERE clause.
+"""
+        # FIXME! We don't actually *use* solint!
+        # FIXME! We don't set startrow!
+        # Were these meeant to be related?
+        startrow = 0
         freqs, n_freqs, df, ref_freq = FFData.get_freqs(msname, swid)
         ddid = FFData.get_data_desc_id(msname, swid, pol_id)
-        times, n_times, nrow, dt = FFData.get_global_times(
-            msname, qrest, solint, startrow)
-        bi = BaselineIterator(antenna_list)
+        times, dt = FFData.get_global_times(
+            msname, qrest, startrow)
+        n_times = len(times)
+        nrow = n_times
+        bi = bli.BaselineIterator(antenna_list)
         # Make arrays:
         dshape = (bi.n_antennas, bi.n_antennas, n_freqs, n_times)
         raw_data = np.zeros(dshape, np.complex)
@@ -272,34 +251,32 @@ class FFData(object):
         casalog.post("Loading data", "INFO")
         # We have Measurement Set antenna ids (s0, s1)
         # and array indices (i, j) running in parallel.
+        verbose = False
         for (s0, s1), (i, j) in bi.iter():
-            # casalog.post("Loading data for base-line ({}, {}).".format(
-            #     s0, s1), "DEBUG")
-            # casalog.post("(s0, s1)={}; (i, j)={}".format(
-            #     (s0, s1), (i, j)), "DEBUG")
-            # casalog.post("nrow {}".format(nrow), "DEBUG")
-            # casalog.post("ddid {}".format(ddid), "DEBUG")
+            if verbose:
+                casalog.post("Loading data for base-line ({}, {}).".format(
+                    s0, s1), "DEBUG")
+                casalog.post("(s0, s1)={}; (i, j)={}".format(
+                    (s0, s1), (i, j)), "DEBUG")
+                casalog.post("ddid {}".format(ddid), "DEBUG")
             query = ('DATA_DESC_ID = {} AND ANTENNA1={} AND ANTENNA2={}'
                      ' AND {}'.format(ddid, s0, s1, qrest))
-            #casalog.post("Query {}".format(query), "DEBUG")
+            if verbose:
+                casalog.post("Query {}".format(query), "DEBUG")
             t = tb.query(query)
             casalog.post("Nrows for {}-{} = {}".format(
                 s0, s1, t.nrows()), "DEBUG")
-            actual_times = t.getcol("TIME", startrow=startrow, nrow=nrow)
-            # FIXME: this can't be right can it?
-            # FIXME: it puts everything at the start of the interval.
-            # FIXME: won't affect delays or rates, but won't help with phases.
-            #
-            # FIXME: update: the timerange gets preprocessed by
-            # utils.actual_timerangeq so this is actually safer than it
-            # looks.
+            actual_times = t.getcol("TIME", startrow=startrow, nrow=n_times)
+            # NB: the timerange gets preprocessed by
+            # utils.actual_timerangeq so this is safer than it looks.
             time_ints = ((actual_times-actual_times[0])/dt + 0.5).astype(np.int)
-            # casalog.post(
-            #     "len(time_ints) {} {}\nn_times {}\ndt {}".format(
-            #         len(time_ints), time_ints[-10:], n_times, dt),
-            #     "DEBUG")
+            if verbose:
+                casalog.post(
+                    "len(time_ints) {} {}\nn_times {}\ndt {}".format(
+                        len(time_ints), time_ints[-10:], n_times, dt),
+                    "DEBUG")
             d = t.getcol(datacol, startrow=startrow, nrow=nrow)[polind]
-            # casalog.post("nrows: {}".format(t.nrows()), "DEBUG")
+            if verbose: casalog.post("nrows: {}".format(t.nrows()), "DEBUG")
             f = t.getcol("FLAG", startrow=startrow, nrow=nrow)[polind]
             fr = t.getcol("FLAG_ROW", startrow=startrow, nrow=nrow)
             weights1d = t.getcol('WEIGHT', startrow=startrow, nrow=nrow)[polind]
@@ -307,7 +284,7 @@ class FFData(object):
             # note: can't wait till the end to unitize, because
             # unitizer dislikes zeros.
             for ai, l in enumerate(time_ints):
-                # casalog.post("ai, l {} {}".format(ai, l), "DEBUG")
+                if verbose: casalog.post("ai, l {} {}".format(ai, l), "DEBUG")
                 raw_data[i, j, :, l] = d[:, ai]
                 data[i, j, :, l] = fringer.unitize(d[:, ai])
                 weights[i, j, :, l] = weights1d[ai]
@@ -332,11 +309,11 @@ class FFData(object):
         ffd.bi = bi
         return ffd
     @staticmethod
-    def make_FFD_multiband(msname, antenna_list, pol_id, polind, qrest,
-                           startrow=0, datacol="DATA", solint=200):
+    def make_FFD_multiband(msname, antenna_list, pol_id, polind, qrest, datacol="DATA", solint=120):
+        # FIXME: We don't use solint
         bi = BaselineIterator(antenna_list)
-        (times, n_times, nrow, dt) = \
-                    FFData.get_global_times(msname, qrest, solint, startrow)
+        (times, dt) = FFData.get_global_times(msname, qrest)
+        n_times = len(times)
         sw_to_dd = FFData.get_data_desc_map(msname, pol_id)
         (freqs, n_chanfreqs, n_freqs,
          df, offsets, ref_freq) = FFData.get_all_freqs(msname)
@@ -363,19 +340,17 @@ class FFData(object):
             if actualrows==0:
                 casalog.post("No data for baseline {}-{}, skipping".format(s0, s1))
                 continue
-            # casalog.post("startrow={} nrow={} actualrows {}".format(startrow, nrow, actualrows), "DEBUG")
-            actual_times = t.getcol("TIME", startrow=startrow, nrow=nrow)
+            actual_times = t.getcol("TIME")
             if len(actual_times) > n_times:
                 raise RuntimeError(
                     "Too many times on baseline {}-{}: {} > {}".format(
                         s0, s1, len(actual_times), n_times))
             time_ints = (actual_times-actual_times[0]/dt + 0.5).astype(np.int)
-            d = t.getcol(datacol, startrow=startrow, nrow=nrow)[polind]
+            d = t.getcol(datacol)[polind]
             # casalog.post("Query {}".format(q), "DEBUG")
-            # casalog.post("nrows: {}".format(t.nrows()), "DEBUG")
-            f = t.getcol("FLAG", startrow=startrow, nrow=nrow)[polind]
-            fr = t.getcol("FLAG_ROW", startrow=startrow, nrow=nrow)
-            weights1d = t.getcol('WEIGHT', startrow=startrow, nrow=nrow)[polind]
+            f = t.getcol("FLAG")[polind]
+            fr = t.getcol("FLAG_ROW")
+            weights1d = t.getcol('WEIGHT')[polind]
             fl = operator.or_(f, fr)
             # note: can't wait till the end to unitize, because
             # unitizer dislikes zeros.
@@ -471,8 +446,9 @@ class FFData(object):
         casalog.post("Starting Fourier transform with "
                      "oversampling of {}.".format(pad))
         self.pad = pad
-        # Note that we make ffts of _all_ baselines here.
-        # We're only really supposed to be doing baselines with a ref antenna.
+        # Note that we make ffts of _all_ baselines here.  We're only
+        # really supposed to be doing baselines with a ref antenna.
+        # That's an expensive over-reach!
         padded_shape = tuple(pad*n for n in self.data.shape[2:])
         data = (self.data * self.snr_weights).filled(fill_value=0.0)
         # data = (self.data * 1).filled(fill_value=0.0)

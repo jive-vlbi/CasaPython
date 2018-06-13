@@ -15,7 +15,7 @@ def all_cals_to_ref(msname, polind, pol_id, timeq, solint=300):
     swids = utils.get_spectral_windows(msname)
     sm = utils.get_antenna_map(msname, 'NAME')
     antennas2 = utils.get_antennas(msname, timeq)
-    ism = utils.invert_map(sm)
+    ism = bli.invert_map(sm)
     ref_antenna = 0 # FIXME
     #
     cal_table_names = []

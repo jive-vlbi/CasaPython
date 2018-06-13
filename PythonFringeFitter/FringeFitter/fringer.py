@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import numpy as np, scipy
 from numpy import fft
 import math, sys, logging, inspect, itertools
-import ffd, lsqrs, param, utils
+import ffd, lsqrs, param, utils, bli
 
 def index_of_max(a):
     imax = np.argmax(a, axis=None)
@@ -340,7 +340,7 @@ def trim_data(anffd, e_antennas_to_remove):
                        fill_value=0+0j)
     reduced_antenna_map = make_reduced_antenna_map(n_antennas, e_antennas_to_remove)
     # casalog.post("reduced_antenna_map".format(reduced_antenna_map), "DEBUG")
-    for i1, j1 in lsqrs.upper_triangle(n_actual_e_antennas):
+    for i1, j1 in bli.upper_triangle(n_actual_e_antennas):
         i0 = reduced_antenna_map[i1]
         j0 = reduced_antenna_map[j1]
         weights[i1, j1] = anffd.weights[i0, j0]

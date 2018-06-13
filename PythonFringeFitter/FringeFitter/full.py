@@ -9,8 +9,8 @@ def sane_time(t):
 def get_bl_data(msname, antennas, ref_antenna, swid, pol_id, polind, timeq, startrow, fftpad=8):
     ref_s_ind = antennas.index(ref_antenna)
     n_antennas = len(antennas)
-    e_baselines = lsqrs.triangle_l(range(n_antennas))
-    baselines = lsqrs.triangle_l(antennas)
+    e_baselines = bli.triangle_l(range(n_antennas))
+    baselines = bli.triangle_l(antennas)
     ffd = get_some_data(msname, antenna_list, ant2, swid, pol_id, polind, timeq, startrow, nrow=40)
     first = True
     for (s0, s1), (i, j) in zip(baselines, e_baselines):

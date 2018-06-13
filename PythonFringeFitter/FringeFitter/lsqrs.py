@@ -1,23 +1,10 @@
 import operator, itertools, logging
 import scipy.optimize, numpy as np
-import utils
+import utils, bli
+
 
 def realify(v):
     return np.concatenate([v.real, v.imag])
-
-def triangle_l(l):
-    return [(l[i], l[j])
-            for j in range(len(l))
-            for i in range(j)]
-
-def triangle(n):
-    return [(i,j) for j in range(n) for i in range(j)]
-
-def upper_triangle(n):
-    return [(i,j) for j in range(n) for i in range(j+1, n)]
-
-def ij(i, j):
-    return (i,j) if i <= j else (j, i)
 
 def add_ref_zeroes(l, ref_ant):
     l.insert(3*ref_ant, 0.0)
@@ -29,7 +16,7 @@ def add_ref_zeroes(l, ref_ant):
 def make_some_s3_noise(grid_shape, n_antennas, cycles=1):
     shp = (n_antennas, n_antennas) + grid_shape 
     res = np.zeros(shp, dtype=np.complex)
-    for i,j in triangle(n_antennas):
+    for i,j in bli.triangle(n_antennas):
         randoms = np.random.random(grid_shape)
         noise = np.exp(2*np.pi*1j*cycles*(randoms-1))
         res[i,j] = noise
@@ -64,7 +51,7 @@ def gen_model_s3(v0, Ts, Fs, n, ref_ant=None):
     data_shape = (n, n) + Ts.shape
     param = np.reshape(v, (n, 3))
     res = np.zeros(data_shape, dtype=np.complex)
-    for i, j in triangle(n):
+    for i, j in bli.triangle(n):
         dpsi, dr, dtau = param[j]-param[i]
         res[i, j, :, :] = gen_bl_model(dpsi, dr, dtau, Ts, Fs)
     return res

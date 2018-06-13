@@ -1,9 +1,24 @@
+"""This module implements the FringeFitter and MultiFringeFitter
+classes which implement the algorithm pattern for fringe fitting.
+
+The script I originally used for fringe fitting when I was developing
+the code became unweildy so I factored it out into the 'run' method of
+the FringeFitter class, with a constructor used to initialise the
+necessary state. That's why the name of the module is '_classified'. (I
+no longer know what 'clog_' once meant to me, I'm afraid.)
+
+MultiFringeFitter was added later to handle the multiband case; not
+needlessly duplicating the code was a strong argument for factoring
+this stuff into classes in the first place.
+
+"""
+
 import sys
 import numpy as np, itertools
 import ffd, fringer, utils
 from taskinit import casalog
 import make_table
-
+import bli
 
 class UnhandledCase(Exception):
     def __init__(self, s):
@@ -14,6 +29,10 @@ class FringeFitter(object):
                  threshold=None, snr_threshold=None, antennas=None,
                  spectral_windows=None,
                  solint=None, solmin=0, solsub=1, dofloat=True):
+        """Configure a fringe-fit. 
+
+I assumed at the time that you would choose data by scan. This
+assumption hasn't really aged all that well; it should be revisited."""
         self.msname = msname
         if scans is None:
             raise UnhandledCase("No scans selected!")
@@ -45,7 +64,7 @@ class FringeFitter(object):
             self.spectral_windows = spectral_windows
         self.timeqs = self.make_time_qs_from_scans(scans)
         self.antenna_map = utils.get_antenna_map(self.msname)
-        self.ism = utils.invert_map(self.antenna_map)
+        self.ism = bli.invert_map(self.antenna_map)
         if antennas is None:
             # FIXME! Should do this per scan!
             self.antennas2 = sorted(
@@ -79,14 +98,15 @@ class FringeFitter(object):
         self.rowcount = 0
         #
         shape = (len(self.polinds), len(self.antennas2))
-        # Looks like we don't need 'F'? Leave it in for now.
-        # FIXME: find out one way or another.
         self.delays = np.zeros(shape, np.float, order='F')
         self.phases = np.zeros(shape, np.float, order='F')
         self.rates = np.zeros(shape, np.float, order='F')
         self.flags = np.zeros(shape, np.bool, order='F')
         self.sigs = []
     def make_FFD(self, timeq, swid, polind, solint=300):
+        """The FFD class selects data from the measurement set using a TaQL query.
+The data is organized into arrays raw_data, (normalized) data, weights, flags, 
+each of dimensions [nelems, nelems, nt, nf]"""
         timeq2 = ffd.actual_timerangeq(self.msname, timeq)
         casalog.post("Processing spectral window {} for data selection {}"
                      "".format(swid, timeq), "DEBUG")
@@ -95,6 +115,9 @@ class FringeFitter(object):
                                     datacol="CORRECTED_DATA", solint=solint)
         return anffd
     def run(self):
+        """Run the fringe fitter algorithm. 
+
+This is why this class exists at all."""
         for scan in self.scans:
             if self.solint is None:
                 solint = utils.get_scan_length(self.msname, scan)
@@ -135,7 +158,9 @@ class FringeFitter(object):
     def make_time_qs_from_scans(self, scans):
         return [self.make_time_q_from_scan(s) for s in scans]
     def write_table(self, timeq, flags, swid, phases, delays, rates):
-        """Single-band version."""
+        """Write out the results in the approved FringeJones table format.
+
+We use 'make_table' to handle the details of the table."""
         timeq2 = timeq + " AND (ANTENNA1 = {} OR ANTENNA2 = {})".format(self.ref_antenna, self.ref_antenna)
         obsid, field, scan = [ffd.distinct_thing(self.msname, timeq2, col)
                               for col in ['OBSERVATION_ID', 'FIELD_ID', 'SCAN_NUMBER']]
@@ -143,12 +168,10 @@ class FringeFitter(object):
         darr = -delays*1e9
         pharr = -phases # Now radians!
         rarr = -rates
-        # We don't write the rates!
         for i, s in enumerate(self.antennas2):
             antenna = s
             casalog.post("Writing row {} for antenna {}".format(i, antenna))
             assert anffd.get_antenna_index(s) == i
-            # time = anffd.get_ref_time()
             time = anffd.get_min_time()
             interval = anffd.get_interval()
             ref_freq = anffd.ref_freq
