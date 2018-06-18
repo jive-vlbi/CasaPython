@@ -114,7 +114,7 @@ each of dimensions [nelems, nelems, nt, nf]"""
                                     self.pol_id, polind, timeq2,
                                     datacol="CORRECTED_DATA", solint=solint)
         return anffd
-    def run(self):
+    def run(self, zero_rates=False):
         """Run the fringe fitter algorithm. 
 
 This is why this class exists at all."""
@@ -137,7 +137,8 @@ This is why this class exists at all."""
                     flags, dels, phs, rs, sig = t
                     self.delays[pi, :] = dels
                     self.phases[pi, :] = phs
-                    self.rates[pi, :] = rs
+                    if not zero_rates:
+                        self.rates[pi, :] = rs
                     self.flags[pi, :] = flags
                     self.sigs.append(sig)
                     # FIXME: Both here and in fringer.fit_fringe_ffd we
