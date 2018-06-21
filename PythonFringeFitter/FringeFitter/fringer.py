@@ -289,11 +289,17 @@ def fit_fringe_ffd(anffd, ref_antenna, antennas2, pad=8,
     # # FIXME: can this be folded into new reduced_antenna_map paradigm?
     params3, removed_params = param.remove_antennas(params2, e_antennas_to_remove)
     new_e_ref_antenna = e_ref_antenna - sum([int(a < e_ref_antenna) for a in e_antennas_to_remove])
-    params4, ref_params = param.remove_ref(params3, new_e_ref_antenna)
+    params3b = params3[:]
+    disps = 1e-11
+    for i in range(len(params3b)/3):
+        d = 0 if i==0 else disps
+        params3b.insert(4*(i+1)-1, d)
+    assert (len(params3b) % 4) == 0
+    params4, ref_params = param.remove_ref(params3b, new_e_ref_antenna)
+    casalog.post("params3b: {}".format(params3b))
     casalog.post("params4: {}".format(params4))
-    args=(anffd.tgrid0, anffd.fgrid0, n_actual_e_antennas, data, weights, new_e_ref_antenna)
+    args=(anffd.tgrid0, anffd.fgrid0, anffd.freqs, n_actual_e_antennas, data, weights, new_e_ref_antenna)
     casalog.post("Starting least-squares solver", "INFO")
-
     # Caution! New!
     eps = 1e-10
     sweight = np.sum(weights*np.logical_not(data.mask))
@@ -303,33 +309,38 @@ def fit_fringe_ffd(anffd, ref_antenna, antennas2, pad=8,
         "".format(sweight, eps, ftol))
     res_t = scipy.optimize.leastsq(lsqrs.vector_s3_test, params4,
                                    full_output=1, args=args,
-                                   maxfev=20,
-                                   col_deriv=True,
-                                   Dfun=lsqrs.matrix_j_s3,
-                                   ftol=ftol)
+                                   maxfev=100,
+                                   # col_deriv=True,
+                                   # Dfun=lsqrs.matrix_j_s3,
+                                   ftol=ftol,
+                                   diag = (n_actual_e_antennas-1)*[1,  1e-2, 1e-6, 1e-5], 
+    )
     casalog.post("Least-squares solver finished", "INFO")
     sol_out = list(res_t[0])
-    casalog.post("Least-squares solver finished after {} iterations".format(res_t[2]['nfev']), "DEBUG")
+    casalog.post("Least-squares solver finished after {} iterations".format(res_t[2]['nfev']), "INFO")
     # 1 t/m 4 good; others bad.
-    casalog.post("Solver status {}, message: {}".format(res_t[4], res_t[3]), "DEBUG")
+    casalog.post("Solver status {}, message: {}".format(res_t[4], res_t[3]), "INFO")
     # casalog.post("sol_out".format(sol_out), "DEBUG")
     sigma_p = param.get_phases(sol_out) # FIXME
     pout2d0 = param.restore_ref(sol_out, ref_params, new_e_ref_antenna)
-    dels0 = param.get_delays(pout2d0)
-    casalog.post("dels0 {}".format(dels0))
+    dels0 = param.get_delays(sol_out)
     flags, pout2d = param.restore_antennas(pout2d0, removed_params, e_antennas_to_remove)
     #
     dels = param.get_delays(pout2d)
     r0s = param.get_rates(pout2d)
     rs = r0s/anffd.ref_freq
     phs0 = param.get_phases(pout2d)
+    disps = param.get_disps(pout2d)
+    casalog.post("All terms: {}".format(pout2d), "INFO")
+    casalog.post("Delay terms: {}".format(dels), "INFO")
+    casalog.post("Rate terms: {}".format(rs), "INFO")
+    casalog.post("Dispersive terms: {}".format(disps), "INFO")
     DT = anffd.tgrid0[0, -1]
     # phs = +np.array(phs0) + np.pi*DT*np.array(r0s)
     # We do NOT correct anything here; leave that to the writer.
     phs = np.array(phs0) 
     # + 2*np.pi*F_midpoint*np.array(dels)
-    casalog.post("dels {}".format(dels))
-    return flags, dels, phs, rs, sigma_p
+    return flags, dels, phs, rs, disps, sigma_p
 
 def trim_data(anffd, e_antennas_to_remove):
     n_antennas = anffd.data.shape[0]

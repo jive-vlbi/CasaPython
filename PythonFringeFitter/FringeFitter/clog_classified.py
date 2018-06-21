@@ -101,6 +101,7 @@ assumption hasn't really aged all that well; it should be revisited."""
         self.delays = np.zeros(shape, np.float, order='F')
         self.phases = np.zeros(shape, np.float, order='F')
         self.rates = np.zeros(shape, np.float, order='F')
+        self.disps = np.zeros(shape, np.float, order='F')
         self.flags = np.zeros(shape, np.bool, order='F')
         self.sigs = []
     def make_FFD(self, timeq, swid, polind, solint=300):
@@ -134,11 +135,12 @@ This is why this class exists at all."""
                         threshold=self.threshold,
                         threshold_method=self.threshold_method,
                         snr_threshold=self.snr_threshold)
-                    flags, dels, phs, rs, sig = t
+                    flags, dels, phs, rs, disps, sig = t
                     self.delays[pi, :] = dels
                     self.phases[pi, :] = phs
                     if not zero_rates:
                         self.rates[pi, :] = rs
+                    self.disps[pi, :] = disps
                     self.flags[pi, :] = flags
                     self.sigs.append(sig)
                     # FIXME: Both here and in fringer.fit_fringe_ffd we
