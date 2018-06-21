@@ -240,16 +240,6 @@ def snr(f, hole_shape=(3,3)):
     rms = rms_window(absf, ind, hole_shape)
     return peak/rms
 
-
-def fit_fringe_lm(msname, antennas2, ref_antenna, swid, polind, pol_id, timeq,
-                  datacol="DATA", solint=None, threshold=0.0, snr_threshold=0.0,
-                  threshold_method=None, ref_weights=True, pad=8):
-    anffd = ffd.FFData.make_FFD(msname, antennas2, swid, polind, pol_id, timeq,
-                                solint=solint, datacol=datacol)
-    return fit_fringe_ffd(anffd, ref_antenna, antennas2, pad=pad,
-                          threshold_method=threshold_method,
-                          threshold=threshold, snr_threshold=snr_threshold)
-
 def fit_fringe_ffd(anffd, ref_antenna, antennas2, pad=8,
                    threshold_method=None, threshold=0.0, snr_threshold=0.0,
                    snr_threshold_method=None):
