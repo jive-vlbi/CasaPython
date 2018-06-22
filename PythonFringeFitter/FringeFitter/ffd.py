@@ -1,12 +1,17 @@
 from taskinit import tb
 from taskinit import casalog
-import operator, itertools
-import math, numpy as np, numpy.ma as ma
+import operator
+import itertools
+import math
+import numpy as np
+import numpy.ma as ma
 from numpy import fft
 # from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import pyplot as plt
+import scipy
 # mine:
 import fringer, lsqrs, utils
+import param
 import bli
 import sys
 
@@ -618,6 +623,118 @@ These antennas should be removed from the data set before the least-squares algo
         w += w.transpose()
         weights[:, :, 0, 0] = w
         self.weights = weights
+    def fit_fringe(self, ref_antenna, antennas2, pad=8,
+                       threshold_method=None, threshold=0.0, snr_threshold=0.0,
+                       snr_threshold_method=None):
+        self.fft(pad=pad)
+        (nf,) = self.freqs.shape
+        n_antennas = len(antennas2)
+        F_midpoint = self.fgrid0[nf//2][0]
+        # get_params uses p-antennas
+        params2 = self.get_params(ref_antenna=ref_antenna)
+        self.params2 = params2
+        e_ref_antenna = self.get_antenna_index(ref_antenna) # FIXME: really?
+        # everything else uses e-antennas
+        ref_params = param.get_antenna_parameters(params2, e_ref_antenna)
+        self.report_fringes(e_ref_antenna)
+        self.report_snrs(e_ref_antenna)
+        ## FIXME: I don't know why we're doing this here, or at all, but
+        ## SNRs need the other sensible kind of weights.
+        self.make_weighted_weights()
+        if threshold_method == 'raw':
+            e_antennas_to_remove0 = self.get_e_antennas_below_threshold(e_ref_antenna, threshold)
+        elif threshold_method == 'snr':
+            e_antennas_to_remove0 = self.report_snrs(e_ref_antenna, snr_threshold)
+        else:
+            e_antennas_to_remove0 = []
+        e_antennas_to_remove = sorted(e_antennas_to_remove0)
+        # Here we need to remove also antennas from self.data and self.weights
+        p_antennas_to_remove = [self.get_p_antenna_index(e) for e in e_antennas_to_remove]
+        p_antennas_to_keep = [self.get_p_antenna_index(e) for e in range(n_antennas)
+                              if e not in  e_antennas_to_remove]
+        if len(e_antennas_to_remove) > 0:
+            casalog.post("{} antennas have fringes below thresholds and will be removed".format(
+                len(e_antennas_to_remove), "INFO"))
+            casalog.post("Masking antennas " + ", ".join("{}".format(p) for p in p_antennas_to_remove),
+                         "INFO")
+        self.trim_data(e_antennas_to_remove)
+        n_actual_e_antennas = len(antennas2) - len(e_antennas_to_remove)
+        # # FIXME: can this be folded into new reduced_antenna_map paradigm?
+        params3, removed_params = param.remove_antennas(params2, e_antennas_to_remove)
+        new_e_ref_antenna = e_ref_antenna - sum([int(a < e_ref_antenna) for a in e_antennas_to_remove])
+        params3b = params3[:]
+        disps = 1e-11
+        for i in range(len(params3b)/3):
+            d = 0 if i==0 else disps
+            params3b.insert(4*(i+1)-1, d)
+        assert (len(params3b) % 4) == 0
+        params4, ref_params = param.remove_ref(params3b, new_e_ref_antenna)
+        casalog.post("params3b: {}".format(params3b))
+        casalog.post("params4: {}".format(params4))
+        args=(self.tgrid0, self.fgrid0, self.freqs, n_actual_e_antennas, self.data, self.weights, new_e_ref_antenna)
+        casalog.post("Starting least-squares solver", "INFO")
+        # Caution! New!
+        eps = 1e-10
+        sweight = np.sum(self.weights*np.logical_not(self.data.mask))
+        ftol = eps*sweight
+        casalog.post(
+            "Sum of weights {}; error per phasor {}; ftol={}."
+            "".format(sweight, eps, ftol))
+        res_t = scipy.optimize.leastsq(lsqrs.vector_s3_test, params4,
+                                       full_output=1, args=args,
+                                       maxfev=100,
+                                       # col_deriv=True,
+                                       # Dfun=lsqrs.matrix_j_s3,
+                                       ftol=ftol,
+                                       diag = (n_actual_e_antennas-1)*[1,  1e-2, 1e-6, 1e-5], 
+        )
+        casalog.post("Least-squares solver finished", "INFO")
+        sol_out = list(res_t[0])
+        casalog.post("Least-squares solver finished after {} iterations".format(res_t[2]['nfev']), "INFO")
+        # 1 t/m 4 good; others bad.
+        casalog.post("Solver status {}, message: {}".format(res_t[4], res_t[3]), "INFO")
+        # casalog.post("sol_out".format(sol_out), "DEBUG")
+        sigma_p = param.get_phases(sol_out) # FIXME
+        pout2d0 = param.restore_ref(sol_out, ref_params, new_e_ref_antenna)
+        dels0 = param.get_delays(sol_out)
+        flags, pout2d = param.restore_antennas(pout2d0, removed_params, e_antennas_to_remove)
+        #
+        dels = param.get_delays(pout2d)
+        r0s = param.get_rates(pout2d)
+        rs = r0s/self.ref_freq
+        phs0 = param.get_phases(pout2d)
+        disps = param.get_disps(pout2d)
+        casalog.post("All terms: {}".format(pout2d), "INFO")
+        casalog.post("Delay terms: {}".format(dels), "INFO")
+        casalog.post("Rate terms: {}".format(rs), "INFO")
+        casalog.post("Dispersive terms: {}".format(disps), "INFO")
+        DT = self.tgrid0[0, -1]
+        # phs = +np.array(phs0) + np.pi*DT*np.array(r0s)
+        # We do NOT correct anything here; leave that to the writer.
+        phs = np.array(phs0) 
+        # + 2*np.pi*F_midpoint*np.array(dels)
+        self.flags = flags
+        self.dels = dels
+        self.phs = phs
+        self.rs = rs
+        self.disps = disps
+        self.sigma_p = sigma_p
+    def trim_data(self, e_antennas_to_remove):
+        n_antennas = self.data.shape[0]
+        n_actual_e_antennas = n_antennas - len(e_antennas_to_remove)
+        new_shape = (n_actual_e_antennas, n_actual_e_antennas) + self.data.shape[2:]
+        weights = np.zeros(new_shape, np.float)
+        data = np.ma.array(data = np.zeros(new_shape, np.complex),
+                           fill_value=0+0j)
+        reduced_antenna_map = fringer.make_reduced_antenna_map(n_antennas, e_antennas_to_remove)
+        # casalog.post("reduced_antenna_map".format(reduced_antenna_map), "DEBUG")
+        for i1, j1 in bli.upper_triangle(n_actual_e_antennas):
+            i0 = reduced_antenna_map[i1]
+            j0 = reduced_antenna_map[j1]
+            self.weights[i1, j1] = self.weights[i0, j0]
+            self.weights[j1, i1] = self.weights[j0, i0]
+            self.data[i1, j1] = self.data[i0, j0]
+            self.data[j1, i1] = self.data[j0, i0]
 
 
 class FFDPlotter(object):

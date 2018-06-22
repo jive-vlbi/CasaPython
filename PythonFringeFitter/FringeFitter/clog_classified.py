@@ -128,21 +128,25 @@ This is why this class exists at all."""
             solintqs = ffd.divide_up_timerange(self.msname, scanq, solint,
                                                self.solmin, self.solsub, self.dofloat)
             for timeq, swid in itertools.product(solintqs, self.spectral_windows):
+                # The data in the measurement set is stored separately
+                # for the different polarisations.  At some point I
+                # came to the Galaxy Brain decision that the an FFD
+                # should handle a single polarization, so we have a
+                # loop over the polarisations here.
                 for pi, pol_ind in enumerate(self.polinds):
                     self.anffd = self.make_FFD(timeq, swid, pol_ind, solint)
-                    t = fringer.fit_fringe_ffd(
-                        self.anffd, self.ref_antenna, self.antennas2,
+                    self.anffd.fit_fringe(
+                        self.ref_antenna, self.antennas2,
                         threshold=self.threshold,
                         threshold_method=self.threshold_method,
                         snr_threshold=self.snr_threshold)
-                    flags, dels, phs, rs, disps, sig = t
-                    self.delays[pi, :] = dels
-                    self.phases[pi, :] = phs
+                    self.delays[pi, :] = self.anffd.dels
+                    self.phases[pi, :] = self.anffd.phs
                     if not zero_rates:
-                        self.rates[pi, :] = rs
-                    self.disps[pi, :] = disps
-                    self.flags[pi, :] = flags
-                    self.sigs.append(sig)
+                        self.rates[pi, :] = self.anffd.rs
+                    self.disps[pi, :] = self.anffd.disps
+                    self.flags[pi, :] = self.anffd.flags
+                    self.sigs.append(self.anffd.sigma_p)
                     # FIXME: Both here and in fringer.fit_fringe_ffd we
                     # have explicit code to handle the choice of methods.
                     # This smells bad.
@@ -153,21 +157,20 @@ This is why this class exists at all."""
                     else:
                         bad_antennas = []
                     self.bad_antennas |= set(bad_antennas)
-                self.write_table(timeq, self.flags, swid, self.phases, self.delays, self.rates)
+                self.write_table(self.anffd, timeq, self.flags, swid, self.phases, self.delays, self.rates)
     def getBadAntennas(self):
         return self.bad_antennas()
     def make_time_q_from_scan(self, scan):
         return "SCAN_NUMBER={}".format(scan)
     def make_time_qs_from_scans(self, scans):
         return [self.make_time_q_from_scan(s) for s in scans]
-    def write_table(self, timeq, flags, swid, phases, delays, rates):
+    def write_table(self, anffd, timeq, flags, swid, phases, delays, rates):
         """Write out the results in the approved FringeJones table format.
 
 We use 'make_table' to handle the details of the table."""
         timeq2 = timeq + " AND (ANTENNA1 = {} OR ANTENNA2 = {})".format(self.ref_antenna, self.ref_antenna)
         obsid, field, scan = [ffd.distinct_thing(self.msname, timeq2, col)
                               for col in ['OBSERVATION_ID', 'FIELD_ID', 'SCAN_NUMBER']]
-        anffd = self.anffd
         darr = -delays*1e9
         pharr = -phases # Now radians!
         rarr = -rates
@@ -230,18 +233,17 @@ class MultiBandFringeFitter(FringeFitter):
                 timeq2 = ffd.actual_timerangeq(self.msname, timeq)
                 for pi, polind in enumerate(self.polinds):
                     casalog.post("Getting data")
-                    anffd = ffd.FFData.make_FFD_multiband(self.msname, self.antennas2, self.pol_id,
+                    self.anffd = ffd.FFData.make_FFD_multiband(self.msname, self.antennas2, self.pol_id,
                                                           polind, timeq2, datacol="CORRECTED_DATA",
                                                           solint=self.solint)
-                    self.anffd = anffd # so developers can poke it offline.
+
                     casalog.post("Fitting fringes")
-                    self.t = fringer.fit_fringe_ffd(anffd, self.ref_antenna, self.antennas2, pad=self.pad)
-                    fs, dels, phs, rs, sig = self.t
-                    flags[pi, :] = fs
-                    delays[pi, :] = dels
-                    phases[pi, :] = phs
-                    rates[pi, :] = rs
-                    sigs.append(sig)
+                    fringer.fit_fringe(anffd, self.ref_antenna, self.antennas2, pad=self.pad)
+                    flags[pi, :] = self.anffd.flags
+                    delays[pi, :] = self.anffd.delays
+                    phases[pi, :] = self.anffd.phases
+                    rates[pi, :] = self.anffd.rates
+                    sigs.append(self.anffd.sigma_p)
                 for swid in self.spectral_windows:
                     diffs = 2*np.pi*((ref_freq_diffs[swid]*delays) % 1.0)
                     ph = phases + diffs
