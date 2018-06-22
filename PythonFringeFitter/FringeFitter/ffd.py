@@ -694,7 +694,6 @@ These antennas should be removed from the data set before the least-squares algo
         # 1 t/m 4 good; others bad.
         casalog.post("Solver status {}, message: {}".format(res_t[4], res_t[3]), "INFO")
         # casalog.post("sol_out".format(sol_out), "DEBUG")
-        sigma_p = param.get_phases(sol_out) # FIXME
         pout2d0 = param.restore_ref(sol_out, ref_params, new_e_ref_antenna)
         dels0 = param.get_delays(sol_out)
         flags, pout2d = param.restore_antennas(pout2d0, removed_params, e_antennas_to_remove)
@@ -704,6 +703,7 @@ These antennas should be removed from the data set before the least-squares algo
         rs = r0s/self.ref_freq
         phs0 = param.get_phases(pout2d)
         disps = param.get_disps(pout2d)
+        sigma_p = param.get_phases(pout2d) 
         casalog.post("All terms: {}".format(pout2d), "INFO")
         casalog.post("Delay terms: {}".format(dels), "INFO")
         casalog.post("Rate terms: {}".format(rs), "INFO")

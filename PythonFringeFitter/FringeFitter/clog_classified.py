@@ -97,13 +97,6 @@ assumption hasn't really aged all that well; it should be revisited."""
         make_table.make_table(self.msname, self.fj_name)
         self.rowcount = 0
         #
-        shape = (len(self.polinds), len(self.antennas2))
-        self.delays = np.zeros(shape, np.float, order='F')
-        self.phases = np.zeros(shape, np.float, order='F')
-        self.rates = np.zeros(shape, np.float, order='F')
-        self.disps = np.zeros(shape, np.float, order='F')
-        self.flags = np.zeros(shape, np.bool, order='F')
-        self.sigs = []
     def make_FFD(self, timeq, swid, polind, solint=300):
         """The FFD class selects data from the measurement set using a TaQL query.
 The data is organized into arrays raw_data, (normalized) data, weights, flags, 
@@ -119,6 +112,13 @@ each of dimensions [nelems, nelems, nt, nf]"""
         """Run the fringe fitter algorithm. 
 
 This is why this class exists at all."""
+        pshape = (len(self.polinds), len(self.antennas2))
+        delays = np.zeros(pshape, np.float, order='F')
+        phases = np.zeros(pshape, np.float, order='F')
+        rates = np.zeros(pshape, np.float, order='F')
+        disps = np.zeros(pshape, np.float, order='F')
+        flags = np.zeros(pshape, np.bool, order='F')
+        sigma_ps = np.zeros(pshape, np.bool, order='F')
         for scan in self.scans:
             if self.solint is None:
                 solint = utils.get_scan_length(self.msname, scan)
@@ -140,13 +140,13 @@ This is why this class exists at all."""
                         threshold=self.threshold,
                         threshold_method=self.threshold_method,
                         snr_threshold=self.snr_threshold)
-                    self.delays[pi, :] = self.anffd.dels
-                    self.phases[pi, :] = self.anffd.phs
+                    delays[pi, :] = self.anffd.dels
+                    phases[pi, :] = self.anffd.phs
                     if not zero_rates:
-                        self.rates[pi, :] = self.anffd.rs
-                    self.disps[pi, :] = self.anffd.disps
-                    self.flags[pi, :] = self.anffd.flags
-                    self.sigs.append(self.anffd.sigma_p)
+                        rates[pi, :] = self.anffd.rs
+                    disps[pi, :] = self.anffd.disps
+                    flags[pi, :] = self.anffd.flags
+                    sigma_ps[pi, :] = self.anffd.sigma_p
                     # FIXME: Both here and in fringer.fit_fringe_ffd we
                     # have explicit code to handle the choice of methods.
                     # This smells bad.
@@ -157,7 +157,7 @@ This is why this class exists at all."""
                     else:
                         bad_antennas = []
                     self.bad_antennas |= set(bad_antennas)
-                self.write_table(self.anffd, timeq, self.flags, swid, self.phases, self.delays, self.rates)
+                self.write_table(self.anffd, timeq, flags, swid, phases, delays, rates)
     def getBadAntennas(self):
         return self.bad_antennas()
     def make_time_q_from_scan(self, scan):
@@ -243,7 +243,7 @@ class MultiBandFringeFitter(FringeFitter):
                     delays[pi, :] = self.anffd.delays
                     phases[pi, :] = self.anffd.phases
                     rates[pi, :] = self.anffd.rates
-                    sigs.append(self.anffd.sigma_p)
+                    sigs[pi, :] = self.anffd.sigma_p
                 for swid in self.spectral_windows:
                     diffs = 2*np.pi*((ref_freq_diffs[swid]*delays) % 1.0)
                     ph = phases + diffs
