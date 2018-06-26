@@ -112,6 +112,7 @@ each of dimensions [nelems, nelems, nt, nf]"""
         """Run the fringe fitter algorithm. 
 
 This is why this class exists at all."""
+        self.all_ffds = []
         pshape = (len(self.polinds), len(self.antennas2))
         delays = np.zeros(pshape, np.float, order='F')
         phases = np.zeros(pshape, np.float, order='F')
@@ -134,30 +135,31 @@ This is why this class exists at all."""
                 # should handle a single polarization, so we have a
                 # loop over the polarisations here.
                 for pi, pol_ind in enumerate(self.polinds):
-                    self.anffd = self.make_FFD(timeq, swid, pol_ind, solint)
-                    self.anffd.fit_fringe(
+                    anffd = self.make_FFD(timeq, swid, pol_ind, solint)
+                    self.all_ffds.append(anffd)
+                    anffd.fit_fringe(
                         self.ref_antenna, self.antennas2,
                         threshold=self.threshold,
                         threshold_method=self.threshold_method,
                         snr_threshold=self.snr_threshold)
-                    delays[pi, :] = self.anffd.dels
-                    phases[pi, :] = self.anffd.phs
+                    delays[pi, :] = anffd.dels
+                    phases[pi, :] = anffd.phs
                     if not zero_rates:
-                        rates[pi, :] = self.anffd.rs
-                    disps[pi, :] = self.anffd.disps
-                    flags[pi, :] = self.anffd.flags
-                    sigma_ps[pi, :] = self.anffd.sigma_p
+                        rates[pi, :] = anffd.rs
+                    disps[pi, :] = anffd.disps
+                    flags[pi, :] = anffd.flags
+                    sigma_ps[pi, :] = anffd.sigma_p
                     # FIXME: Both here and in fringer.fit_fringe_ffd we
                     # have explicit code to handle the choice of methods.
                     # This smells bad.
                     if self.threshold_method == 'snr':
-                        bad_antennas = self.anffd.get_p_antennas_below_snr_threshold(self.ref_antenna, self.snr_threshold)
+                        bad_antennas = anffd.get_p_antennas_below_snr_threshold(self.ref_antenna, self.snr_threshold)
                     elif self.threshold_method == 'raw':
-                        bad_antennas = self.anffd.get_p_antennas_below_raw_threshold(self.ref_antenna, self.snr_threshold)
+                        bad_antennas = anffd.get_p_antennas_below_raw_threshold(self.ref_antenna, self.snr_threshold)
                     else:
                         bad_antennas = []
                     self.bad_antennas |= set(bad_antennas)
-                self.write_table(self.anffd, timeq, flags, swid, phases, delays, rates)
+                self.write_table(anffd, timeq, flags, swid, phases, delays, rates)
     def getBadAntennas(self):
         return self.bad_antennas()
     def make_time_q_from_scan(self, scan):
@@ -213,6 +215,7 @@ class MultiBandFringeFitter(FringeFitter):
         make_table.make_table(self.msname, self.ctname)
         self.rowcount = 0 # In the table.
     def run(self):
+        self.all_ffds = []
         shape = (2, len(self.antennas2))
         flags = np.zeros(shape, np.bool)
         delays = np.zeros(shape, np.float)
@@ -233,22 +236,22 @@ class MultiBandFringeFitter(FringeFitter):
                 timeq2 = ffd.actual_timerangeq(self.msname, timeq)
                 for pi, polind in enumerate(self.polinds):
                     casalog.post("Getting data")
-                    self.anffd = ffd.FFData.make_FFD_multiband(self.msname, self.antennas2, self.pol_id,
+                    anffd = ffd.FFData.make_FFD_multiband(self.msname, self.antennas2, self.pol_id,
                                                           polind, timeq2, datacol="CORRECTED_DATA",
                                                           solint=self.solint)
-
+                    self.all_ffds.append(anffd)
                     casalog.post("Fitting fringes")
                     fringer.fit_fringe(anffd, self.ref_antenna, self.antennas2, pad=self.pad)
-                    flags[pi, :] = self.anffd.flags
-                    delays[pi, :] = self.anffd.delays
-                    phases[pi, :] = self.anffd.phases
-                    rates[pi, :] = self.anffd.rates
-                    sigs[pi, :] = self.anffd.sigma_p
+                    flags[pi, :] = anffd.flags
+                    delays[pi, :] = anffd.delays
+                    phases[pi, :] = anffd.phases
+                    rates[pi, :] = anffd.rates
+                    sigs[pi, :] = anffd.sigma_p
                 for swid in self.spectral_windows:
                     diffs = 2*np.pi*((ref_freq_diffs[swid]*delays) % 1.0)
                     ph = phases + diffs
-                    # casalog.post("phases {} diffs {}".format(phases, diffs))
                     self.write_table(anffd, timeq2, flags, swid, delays, ph, rates, sigs)
+                
     def write_table(self, anffd, timeq, flags, swid, delays, phases, rates, sigs):
         """Multi-band version."""
         timeq2 = timeq + " AND (ANTENNA1 = {} OR ANTENNA2 = {})".format(self.ref_antenna, self.ref_antenna)

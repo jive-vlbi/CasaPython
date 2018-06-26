@@ -312,6 +312,14 @@ class FFData(object):
         ffd.flags = trimmed_flags
         ffd.raw_data = trimmed_raw
         ffd.bi = bi
+        # FIXME some more! We need to record the set-up data for use in applying the results
+        ffd.msname = msname
+        ffd.antenna_list = antenna_list
+        ffd.swid = swid
+        ffd.pol_id = pol_id
+        ffd.polind = polind
+        ffd.qrest = qrest
+        ffd.datacol = datacol
         return ffd
     @staticmethod
     def make_FFD_multiband(msname, antenna_list, pol_id, polind, qrest, datacol="DATA", solint=120):
@@ -397,6 +405,13 @@ class FFData(object):
         ffd.weights = trimmed_weights
         ffd.antenna_list = antenna_list
         ffd.bi = bi
+        ffd.msname = msname
+        ffd.antenna_list = antenna_list
+        ffd.swid = None
+        ffd.pol_id = pol_id
+        ffd.polind = polind
+        ffd.qrest = qrest
+        ffd.datacol = datacol
         return ffd
     def __init__(self, data, times, freqs, dt, df, weights):
         self.data = data
@@ -686,7 +701,7 @@ These antennas should be removed from the data set before the least-squares algo
                                        # col_deriv=True,
                                        # Dfun=lsqrs.matrix_j_s3,
                                        ftol=ftol,
-                                       diag = (n_actual_e_antennas-1)*[1,  1e-2, 1e-6, 1e-5], 
+                                       diag = (n_actual_e_antennas-1)*[1,  1e-2, 1e-7, 1e-2], 
         )
         casalog.post("Least-squares solver finished", "INFO")
         sol_out = list(res_t[0])

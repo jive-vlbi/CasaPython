@@ -19,19 +19,6 @@ def make_some_s3_noise(grid_shape, n_antennas, cycles=1):
         res[i,j] = noise
     return res
 
-def gen_bl_point_model(dpsi, dr, dtau, ddisp, t, freqs):
-    ## We add a final argument for the sky-frequencies.
-    Fave = np.mean(freqs)
-    F0 = np.min(freqs)
-    Fs = freqs = F0                   
-    ph_disp = ddisp*(Fs+F0) + (ddisp/Fave**2)*Fs - ddisp/F0
-    result = (np.exp(1j*dpsi) *
-              np.exp(1j*2*np.pi*dr*t) *
-              np.exp(1j*2*np.pi*dtau*Fs) *
-              np.exp(1j*2*np.pi*ph_disp)
-    )
-    return result
-
 def gen_bl_model(dpsi, dr, dtau, ddisp, Ts, Fs, freqs):
     # We add a final argument for the sky-frequencies.
     Fave = np.mean(freqs)
@@ -39,9 +26,9 @@ def gen_bl_model(dpsi, dr, dtau, ddisp, Ts, Fs, freqs):
     ph_disp = ddisp*(Fs+F0) + (ddisp/Fave**2)*Fs - ddisp/F0
     result = (np.exp(1j*dpsi) *
               np.exp(1j*2*np.pi*dr*Ts) *
-              np.exp(1j*2*np.pi*dtau*Fs) *
-              np.exp(1j*2*np.pi*ph_disp)
-    )
+              np.exp(1j*2*np.pi*dtau*Fs)
+              # * np.exp(1j*2*np.pi*ph_disp)
+    ) + 1e200*(ddisp)
     return result
 
 def gen_model_s3(v0, Ts, Fs, freqs, n, ref_ant=None):

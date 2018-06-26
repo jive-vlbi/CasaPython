@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import numpy as np, scipy
 from numpy import fft
 import math, sys, logging, inspect, itertools
-import ffd, lsqrs, param, utils, bli
+import ffd, param, utils, bli
 
 def index_of_max(a):
     imax = np.argmax(a, axis=None)
