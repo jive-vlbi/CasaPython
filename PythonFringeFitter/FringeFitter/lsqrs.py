@@ -21,14 +21,15 @@ def make_some_s3_noise(grid_shape, n_antennas, cycles=1):
 
 def gen_bl_model(dpsi, dr, dtau, ddisp, Ts, Fs, freqs):
     # We add a final argument for the sky-frequencies.
-    Fave = np.mean(freqs)
-    F0 = np.min(freqs)
-    ph_disp = ddisp*(Fs+F0) + (ddisp/Fave**2)*Fs - ddisp/F0
+    f0 = np.min(freqs)
+    fm = np.max(freqs)
+    dfs = Fs
+    ph_disp = ddisp/(f0+Fs) + (ddisp/f0/fm)*dfs - ddisp/f0
     result = (np.exp(1j*dpsi) *
               np.exp(1j*2*np.pi*dr*Ts) *
-              np.exp(1j*2*np.pi*dtau*Fs)
-              # * np.exp(1j*2*np.pi*ph_disp)
-    ) + 1e200*(ddisp)
+              np.exp(1j*2*np.pi*dtau*Fs) *
+              np.exp(1j*2*np.pi*ph_disp)
+    ) 
     return result
 
 def gen_model_s3(v0, Ts, Fs, freqs, n, ref_ant=None):
@@ -65,7 +66,7 @@ def vector_s3_test(v, Ts, Fs, freqs, nantennas, data, weights, ref_ant=None):
     return dv
 
 # FIXME! Jacobian must also have a dispersive parameter!
-def matrix_j_s3(v, Ts, Fs, nantennas, data, weights, ref_ant=None):
+def matrix_j_s3(v, Ts, Fs, freqs, nantennas, data, weights, ref_ant=None):
     if ref_ant != None:
         jac = np.zeros((4*(nantennas-1), 2*utils.flatsize(data)), dtype=np.float)
         loop_range = range(0, ref_ant) + range(ref_ant+1, nantennas) 
@@ -87,7 +88,7 @@ def matrix_j_s3(v, Ts, Fs, nantennas, data, weights, ref_ant=None):
                 si = slice((2*l+1)*sz, (2*l+2)*sz)
                 dpsi, dr, dtau, ddisp = param[j]-param[i]
                 sgn = -1 if i == p else 1 # j == p
-                D = weights[i,j]*1j*(gen_bl_model(dpsi, dr, dtau, Ts, Fs))
+                D = weights[i,j]*1j*(gen_bl_model(dpsi, dr, dtau, ddisp, Ts, Fs, freqs))
                 psic = np.ndarray.flatten(sgn*D)
                 jac[4*pind, sr] = psic.real
                 jac[4*pind, si] = psic.imag
@@ -97,7 +98,64 @@ def matrix_j_s3(v, Ts, Fs, nantennas, data, weights, ref_ant=None):
                 tauc = np.ndarray.flatten(sgn*2*np.pi*Fs*D)      # tau_val
                 jac[4*pind+2, sr] = tauc.real
                 jac[4*pind+2, si] = tauc.imag
+                f0 = np.min(freqs)
+                fm = np.max(freqs)
+                # This is new.
+                jac_disp = 1/(f0+Fs) + 1/f0/fm*Fs - 1/f0
+                dispc = np.ndarray.flatten(sgn*2*np.pi*jac_disp*D) # disp val
+                jac[4*pind+3, sr] = dispc.real
+                jac[4*pind+3, si] = dispc.imag
+                
+                
     return jac
+
+## Solving for delay rate and dispersive component simultaneously isn't
+## going as well as I'd hoped, so I want to try solving *only* for
+## dispersion and using CORRECTED_DATA that has delay and rate already
+## corrected.
+##
+## Currently doing a hacky version of this because it is speculative and I am lazy.
+
+def gen_bl_disp(dphi, ddisp, Ts, dfs, freqs):
+    # We add a final argument for the sky-frequencies.
+    f0 = np.min(freqs)
+    fm = np.max(freqs)
+    fs = f0 + dfs
+    ph_disp = ddisp/(fs) + (ddisp/f0/fm)*dfs - ddisp/f0
+    result = np.exp(1j*dphi) * np.exp(1j*2*np.pi*ph_disp)
+    return result
+
+def gen_model_disp(v0, Ts, Fs, freqs, n, ref_ant):
+    # casalog.post("gen_model_s3".format(v0), "DEBUG")
+    # v = add_ref_zeroes(list(v0), ref_ant)
+    v1 = list(v0)
+    # Need constants!
+    v1.insert(2*ref_ant, 0.0)
+    v1.insert(2*ref_ant, 0.0)
+    v = np.array(v1)
+    param = np.reshape(v, (n, 2))
+    print "param", param
+    data_shape = (n, n) + Ts.shape
+    res = np.zeros(data_shape, dtype=np.complex)
+    for i, j in bli.triangle(n):
+        dph, ddisp = param[j]-param[i]
+        res[i, j, :, :] = gen_bl_disp(dph, ddisp, Ts, Fs, freqs)
+    return res
+
+def vector_disp(v, Ts, Fs, freqs, nantennas, data, weights, ref_ant):
+    sz = utils.flatsize(Ts)
+    dv = np.zeros((2*nantennas*nantennas*sz,), dtype=np.float) 
+    dvc = weights*(gen_model_disp(v, Ts, Fs, freqs, nantennas, ref_ant) - data.filled(0+0j))
+    for l, (i, j) in enumerate(itertools.product(range(nantennas),
+                                                 range(nantennas))):
+        sr = slice(2*l*sz, (2*l+1)*sz)
+        si = slice((2*l+1)*sz, (2*l+2)*sz)
+        d = np.ndarray.flatten(dvc[i, j])
+        dv[sr] = d.real
+        dv[si] = d.imag
+    return dv
+
+#### End of dispersion-only hacking
 
 def sigma_p(v, Ts, Fs, nantennas, data, weights, ref_ant=None):
     delta = vector_s3(v, Ts, Fs, nantennas, data, weights, ref_ant)
