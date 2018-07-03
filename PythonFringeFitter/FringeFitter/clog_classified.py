@@ -28,7 +28,7 @@ class FringeFitter(object):
     def __init__(self, msname, fj_name, ref_antenna_name=None, scans=None,
                  threshold=None, snr_threshold=None, antennas=None,
                  spectral_windows=None,
-                 solint=None, solmin=0, solsub=1, dofloat=True):
+                 solint=None, solmin=0, solsub=1, dofloat=True, datacol='DATA'):
         """Configure a fringe-fit. 
 
 I assumed at the time that you would choose data by scan. This
@@ -43,6 +43,7 @@ assumption hasn't really aged all that well; it should be revisited."""
         self.solmin = solmin
         self.solsub = solsub
         self.dofloat = dofloat
+        self.datacol = datacol
         if snr_threshold is None:
             self.snr_threshold = 5.0
         else:
@@ -96,6 +97,7 @@ assumption hasn't really aged all that well; it should be revisited."""
         self.fj_name = fj_name
         make_table.make_table(self.msname, self.fj_name)
         self.rowcount = 0
+        self.make_all_ffds()
         #
     def make_FFD(self, timeq, swid, polind, solint=300):
         """The FFD class selects data from the measurement set using a TaQL query.
@@ -106,20 +108,10 @@ each of dimensions [nelems, nelems, nt, nf]"""
                      "".format(swid, timeq), "DEBUG")
         anffd = ffd.FFData.make_FFD(self.msname, self.antennas2, swid,
                                     self.pol_id, polind, timeq2,
-                                    datacol="CORRECTED_DATA", solint=solint)
+                                    datacol=self.datacol, solint=solint)
         return anffd
-    def run(self, zero_rates=False):
-        """Run the fringe fitter algorithm. 
-
-This is why this class exists at all."""
-        self.all_ffds = []
-        pshape = (len(self.polinds), len(self.antennas2))
-        delays = np.zeros(pshape, np.float, order='F')
-        phases = np.zeros(pshape, np.float, order='F')
-        rates = np.zeros(pshape, np.float, order='F')
-        disps = np.zeros(pshape, np.float, order='F')
-        flags = np.zeros(pshape, np.bool, order='F')
-        sigma_ps = np.zeros(pshape, np.bool, order='F')
+    def make_all_ffds(self):
+        all_ffds = []
         for scan in self.scans:
             if self.solint is None:
                 solint = utils.get_scan_length(self.msname, scan)
@@ -134,32 +126,55 @@ This is why this class exists at all."""
                 # came to the Galaxy Brain decision that the an FFD
                 # should handle a single polarization, so we have a
                 # loop over the polarisations here.
+                inner_ffds = []
                 for pi, pol_ind in enumerate(self.polinds):
                     anffd = self.make_FFD(timeq, swid, pol_ind, solint)
-                    self.all_ffds.append(anffd)
-                    anffd.fit_fringe(
-                        self.ref_antenna, self.antennas2,
-                        threshold=self.threshold,
-                        threshold_method=self.threshold_method,
-                        snr_threshold=self.snr_threshold)
-                    delays[pi, :] = anffd.dels
-                    phases[pi, :] = anffd.phs
-                    if not zero_rates:
-                        rates[pi, :] = anffd.rs
-                    disps[pi, :] = anffd.disps
-                    flags[pi, :] = anffd.flags
-                    sigma_ps[pi, :] = anffd.sigma_p
-                    # FIXME: Both here and in fringer.fit_fringe_ffd we
-                    # have explicit code to handle the choice of methods.
-                    # This smells bad.
-                    if self.threshold_method == 'snr':
-                        bad_antennas = anffd.get_p_antennas_below_snr_threshold(self.ref_antenna, self.snr_threshold)
-                    elif self.threshold_method == 'raw':
-                        bad_antennas = anffd.get_p_antennas_below_raw_threshold(self.ref_antenna, self.snr_threshold)
-                    else:
-                        bad_antennas = []
-                    self.bad_antennas |= set(bad_antennas)
-                self.write_table(anffd, timeq, flags, swid, phases, delays, rates)
+                    inner_ffds.append(anffd)
+                all_ffds.append(inner_ffds)
+        self.all_ffds = all_ffds
+    def run(self, zero_rates=False):
+        """Run the fringe fitter algorithm. 
+
+This is why this class exists at all."""
+        pshape = (len(self.polinds), len(self.antennas2))
+        delays = np.zeros(pshape, np.float, order='F')
+        phases = np.zeros(pshape, np.float, order='F')
+        rates = np.zeros(pshape, np.float, order='F')
+        disps = np.zeros(pshape, np.float, order='F')
+        flags = np.zeros(pshape, np.bool, order='F')
+        sigma_ps = np.zeros(pshape, np.bool, order='F')
+        ## I wanted to use make_all_ffds and iterate over only the ffds
+        ## But that is hard: the delays, phases and rates arrays need
+        ## to use a polarization index
+        for ffd_groups in self.all_ffds:
+            ## FFDs are grouped by time and spectral window; within
+            ## each group there is a separate FFD for each
+            ## polarization.
+            for pi, anffd in enumerate(ffd_groups):
+                anffd.fit_fringe(
+                    self.ref_antenna, self.antennas2,
+                    threshold=self.threshold,
+                    threshold_method=self.threshold_method,
+                    snr_threshold=self.snr_threshold)
+                delays[pi, :] = anffd.dels
+                phases[pi, :] = anffd.phs
+                if not zero_rates:
+                    rates[pi, :] = anffd.rs
+                disps[pi, :] = anffd.disps
+                flags[pi, :] = anffd.flags
+                sigma_ps[pi, :] = anffd.sigma_p
+                # FIXME: Both here and in fringer.fit_fringe_ffd we
+                # have explicit code to handle the choice of methods.
+                # This smells bad.
+                if self.threshold_method == 'snr':
+                    bad_antennas = anffd.get_p_antennas_below_snr_threshold(self.ref_antenna, self.snr_threshold)
+                elif self.threshold_method == 'raw':
+                    bad_antennas = anffd.get_p_antennas_below_raw_threshold(self.ref_antenna, self.snr_threshold)
+                else:
+                    bad_antennas = []
+                self.bad_antennas |= set(bad_antennas)
+            anffd = ffd_groups[0]
+            self.write_table(anffd, anffd.qrest, flags, anffd.swid, phases, delays, rates)
     def getBadAntennas(self):
         return self.bad_antennas()
     def make_time_q_from_scan(self, scan):
