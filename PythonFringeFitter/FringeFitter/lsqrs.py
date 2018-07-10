@@ -1,225 +1,162 @@
-import operator, itertools, logging
-import scipy.optimize, numpy as np
+import operator
+import itertools
+import numpy as np
 import utils, bli
 
-def add_ref_zeroes(l, ref_ant):
-    l.insert(4*ref_ant, 0.0)
-    l.insert(4*ref_ant+1, 0.0)
-    l.insert(4*ref_ant+2, 0.0)
-    l.insert(4*ref_ant+4, 0.0)
+def add_ref_zeroes(v0, ref_ant):
+    return add_n_ref_zeroes(v0, ref_ant, 4)
+
+def add_n_ref_zeroes(v0, ref_ant, n):
+    l = list(v0)
+    for i in range(n):
+        l.insert(4*ref_ant+i, 0.0)
     v = np.array(l)
     return v
 
-def make_some_s3_noise(grid_shape, n_antennas, cycles=1):
-    shp = (n_antennas, n_antennas) + grid_shape 
-    res = np.zeros(shp, dtype=np.complex)
-    for i,j in bli.triangle(n_antennas):
-        randoms = np.random.random(grid_shape)
-        noise = np.exp(2*np.pi*1j*cycles*(randoms-1))
-        res[i,j] = noise
-    return res
 
-def gen_bl_model(dpsi, dr, dtau, ddisp, Ts, Fs, freqs):
-    # We add a final argument for the sky-frequencies.
-    f0 = np.min(freqs)
-    fm = np.max(freqs)
-    dfs = Fs
-    ph_disp = ddisp/(f0+Fs) + (ddisp/f0/fm)*dfs - ddisp/f0
-    result = (np.exp(1j*dpsi) *
-              np.exp(1j*2*np.pi*dr*Ts) *
-              np.exp(1j*2*np.pi*dtau*Fs) *
-              np.exp(1j*2*np.pi*ph_disp)
-    ) 
-    return result
+class BaselinePhasorAll(object):
+    def __init__(self, dts, dfs, freqs):
+        self.f0 = np.min(freqs)
+        self.fm = np.max(freqs)
+        # dfs and dts are the time and frequency grids for the ffd data
+        # set.  They necessarily have the same two-dimensional shape
+        self.dfs = dfs
+        self.dts = dts
+    def get_grid_shape(self):
+        return self.dfs.shape
+    def get_grid_size(self):
+        return utils.flatsize(self.dfs)
+    def get_nparam(self):
+        return 4
+    def make_model(self, dpsi, dr, dtau, ddisp):
+        ph_disp = (ddisp/(self.f0+self.dfs) +
+                   (ddisp/self.f0/self.fm)*self.dfs -
+                   ddisp/self.f0)
+        
+        result = (np.exp(1j*dpsi) *
+                  np.exp(1j*2*np.pi*dr*self.dts) *
+                  np.exp(1j*2*np.pi*dtau*self.dfs) *
+                  np.exp(1j*2*np.pi*ph_disp))
+        return result
+    # FIXME: not used or tested, yet.
+    def make_jacobian(self, dpsi, dr, dtau, ddisp):
+        jac_shape = (4,) + self.dfs.shape
+        jac = np.zeros(jac_shape, np.complex)
+        # We *don't* handle weights in this class at all.
+        D = 1j*(self.make_model(dpsi, dr, dtau, ddisp))
+        jac[0, :, :] = D            # psi derivative
+        jac[1, :, :] = 2*np.pi*self.dts*D # r derivative
+        jac[2, :, :] = 2*np.pi*self.dfs*D # tau derivative
+        jac_disp = (1/(self.f0+self.dfs) +
+                    1/self.f0/self.fm*self.dfs -
+                    1/self.f0)
+        jac[3, :, :] = 2*np.pi*jac_disp*D
+        return jac
 
-def gen_model_s3(v0, Ts, Fs, freqs, n, ref_ant=None):
-    # casalog.post("gen_model_s3".format(v0), "DEBUG")
-    if ref_ant != None:
-        v = add_ref_zeroes(list(v0), ref_ant)
-    else:
-        v = v0
-    data_shape = (n, n) + Ts.shape
-    param = np.reshape(v, (n, 4))
-    res = np.zeros(data_shape, dtype=np.complex)
-    for i, j in bli.triangle(n):
-        dpsi, dr, dtau, ddisp = param[j]-param[i]
-        res[i, j, :, :] = gen_bl_model(dpsi, dr, dtau, ddisp, Ts, Fs, freqs)
-    return res
 
-def fun_s3(v, Ts, Fs, n, data, weights, ref_ant=None):
-    dv = (gen_model_s3(v, Ts, Fs, n, ref_ant) - data)
-    s = np.ndarray.flatten(np.abs(weights*dv)**2)
-    return np.sum(s)
+## Factoring out a baseline model generator into a class means we can
+## use the same framework for generating delay and rate models or
+## dispersive models by using an instance of a different BaselinePhasor
+## class as our generator.
+
+class BaselinePhasorDisp(BaselinePhasorAll):
+    def __init__(self, dts, dfs, freqs):
+        self.dts = dts
+        self.dfs = dfs
+        self.freqs = freqs
+        self.f0 = np.min(freqs)
+        self.fm = np.max(freqs)
+        self.fs = self.f0 + self.dfs
+    def get_nparam(self):
+        return 2
+    def make_model(self, dpsi, ddisp):
+        # We add a final argument for the sky-frequencies.
+        ph_disp = ddisp/(self.fs) + (ddisp/self.f0/self.fm)*self.dfs - ddisp/self.f0
+        result = (np.exp(1j*dpsi) *
+                  np.exp(1j*2*np.pi*ph_disp))
+        return result
+    def make_jacobian(self, dpsi, ddisp):
+        jac_shape = (2,) + self.dfs.shape
+        jac = np.zeros(jac_shape)
+        # We *don't* handle weights in this class at all.
+        D = 1j*(self.make_model(dpsi, dr, dtau, ddisp))
+        jac[0, :, :] = D            # psi derivative
+        jac_disp = (1/(self.f0+self.dfs) +
+                    1/self.f0/self.fm*self.dfs -
+                    1/self.f0)
+        jac[1, :, :] = 2*np.pi*jac_disp*D
 
 # currently the official function
-def vector_s3_test(v, Ts, Fs, freqs, nantennas, data, weights, ref_ant=None):
-    sz = utils.flatsize(Ts)
-    dv = np.zeros((2*nantennas*nantennas*sz,), dtype=np.float) 
-    dvc = weights*(gen_model_s3(v, Ts, Fs, freqs, nantennas, ref_ant) - data.filled(0+0j))
-    for l, (i, j) in enumerate(itertools.product(range(nantennas),
-                                                 range(nantennas))):
-        sr = slice(2*l*sz, (2*l+1)*sz)
+def vector_s3_test(param_vec0, bl_model, n_ant, data, weights, ref_ant=None):
+    nparam = bl_model.get_nparam()
+    param_vec = add_n_ref_zeroes(param_vec0, ref_ant, nparam)
+    param_matrix = np.reshape(param_vec, (n_ant, nparam))
+    data_shape = (n_ant, n_ant) + bl_model.get_grid_shape()
+    model = np.zeros(data_shape, dtype=np.complex)
+    # We loop over upper triangular baseline pairs and calculate the model for each
+    for i, j in bli.triangle(n_ant):
+        dparam = param_matrix[j]-param_matrix[i]
+        model[i, j, :, :] = bl_model.make_model(*dparam)
+    dvc = weights*(model - data.filled(0+0j))
+    # xs
+    sz = bl_model.get_grid_size()
+    # we make a single real array to hold the vector the library
+    # routines use to calculate xi-squared.
+    dv = np.zeros((2*n_ant*n_ant*sz,), dtype=np.float)
+    # Then we put stuff into a single big array.
+    for l, (i, j) in enumerate(itertools.product(range(n_ant),
+                                                 range(n_ant))):
+        sr = slice((2*l+0)*sz, (2*l+1)*sz)
         si = slice((2*l+1)*sz, (2*l+2)*sz)
         d = np.ndarray.flatten(dvc[i, j])
         dv[sr] = d.real
         dv[si] = d.imag
     return dv
 
-# FIXME! Jacobian must also have a dispersive parameter!
-def matrix_j_s3(v, Ts, Fs, freqs, nantennas, data, weights, ref_ant=None):
-    if ref_ant != None:
-        jac = np.zeros((4*(nantennas-1), 2*utils.flatsize(data)), dtype=np.float)
-        loop_range = range(0, ref_ant) + range(ref_ant+1, nantennas) 
-        v = add_ref_zeroes(list(v), ref_ant)
-    else:
-        loop_range = range(nantennas)
-        jac = np.zeros((4*(nantennas), 2*utils.flatsize(data)), dtype=np.float)        
-    param = np.reshape(v, (nantennas, 4))
+# the official jacobian function
+def matrix_j_s3(param_vec0, bl_model, n_ant, data, weights, ref_ant):
+    nparam = bl_model.get_nparam()
+    param_vec = add_n_ref_zeroes(param_vec0, ref_ant, nparam)
+    param_matrix = np.reshape(param_vec, (n_ant, nparam))
+    # The jacobian is real and has one row for each parameter for each antenna
+    jac = np.zeros((nparam*(n_ant-1), 2*utils.flatsize(data)), dtype=np.float)
     # skip ref_ant
-    # Note that this fails if there isn't one!
-    for pind, p in enumerate(loop_range):
-        for l, (i, j) in enumerate(itertools.product(range(nantennas),
-                                                     range(nantennas))):
+    loop_range = range(0, ref_ant) + range(ref_ant+1, n_ant)
+    for p_antenna, p in enumerate(loop_range):
+        for l, (i, j) in enumerate(itertools.product(range(n_ant),
+                                                     range(n_ant))):
+            # p must be equal to exactly one of the antennas i and j
+            # for there to be non-zero jacobian entries.
             if (p == i and p == j) or (p != i and p != j):
                 continue
             else:
-                sz = utils.flatsize(Ts)
-                sr = slice(2*l*sz, (2*l+1)*sz)
+                sz = bl_model.get_grid_size()
+                sr = slice((2*l+0)*sz, (2*l+1)*sz)
                 si = slice((2*l+1)*sz, (2*l+2)*sz)
-                dpsi, dr, dtau, ddisp = param[j]-param[i]
+                dparam = param_matrix[j]-param_matrix[i]
+                w = weights[i, j]
+                # Calculate the jacobian for baseline (i,j)
+                jac_p = bl_model.make_jacobian(*dparam)
+                # And then squish it into the appropriate  part of the
+                # big jacobian array
                 sgn = -1 if i == p else 1 # j == p
-                D = weights[i,j]*1j*(gen_bl_model(dpsi, dr, dtau, ddisp, Ts, Fs, freqs))
-                psic = np.ndarray.flatten(sgn*D)
-                jac[4*pind, sr] = psic.real
-                jac[4*pind, si] = psic.imag
-                rc = np.ndarray.flatten(sgn*2*np.pi*Ts*D)        # r_val 
-                jac[4*pind+1, sr] = rc.real
-                jac[4*pind+1, si] = rc.imag
-                tauc = np.ndarray.flatten(sgn*2*np.pi*Fs*D)      # tau_val
-                jac[4*pind+2, sr] = tauc.real
-                jac[4*pind+2, si] = tauc.imag
-                f0 = np.min(freqs)
-                fm = np.max(freqs)
-                # This is new.
-                jac_disp = 1/(f0+Fs) + 1/f0/fm*Fs - 1/f0
-                dispc = np.ndarray.flatten(sgn*2*np.pi*jac_disp*D) # disp val
-                jac[4*pind+3, sr] = dispc.real
-                jac[4*pind+3, si] = dispc.imag
-                
-                
+                for k in range(nparam):
+                    flat_jac_k = np.ndarray.flatten(sgn*w*jac_p[k])
+                    # print "Shape ", jac_p.shape, jac.shape, data.shape
+                    jac[nparam*p_antenna+k, sr] = flat_jac_k.real
+                    jac[nparam*p_antenna+k, si] = flat_jac_k.imag
     return jac
-
-## Solving for delay rate and dispersive component simultaneously isn't
-## going as well as I'd hoped, so I want to try solving *only* for
-## dispersion and using CORRECTED_DATA that has delay and rate already
-## corrected.
-##
-## Currently doing a hacky version of this because it is speculative and I am lazy.
-
-def gen_bl_disp(dphi, ddisp, Ts, dfs, freqs):
-    # We add a final argument for the sky-frequencies.
-    f0 = np.min(freqs)
-    fm = np.max(freqs)
-    fs = f0 + dfs
-    ph_disp = ddisp/(fs) + (ddisp/f0/fm)*dfs - ddisp/f0
-    result = np.exp(1j*dphi) * np.exp(1j*2*np.pi*ph_disp)
-    return result
-
-def gen_model_disp(v0, Ts, Fs, freqs, n, ref_ant):
-    # casalog.post("gen_model_s3".format(v0), "DEBUG")
-    # v = add_ref_zeroes(list(v0), ref_ant)
-    v1 = list(v0)
-    # Need constants!
-    v1.insert(2*ref_ant, 0.0)
-    v1.insert(2*ref_ant, 0.0)
-    v = np.array(v1)
-    param = np.reshape(v, (n, 2))
-    print "param", param
-    data_shape = (n, n) + Ts.shape
-    res = np.zeros(data_shape, dtype=np.complex)
-    for i, j in bli.triangle(n):
-        dph, ddisp = param[j]-param[i]
-        res[i, j, :, :] = gen_bl_disp(dph, ddisp, Ts, Fs, freqs)
-    return res
-
-def vector_disp(v, Ts, Fs, freqs, nantennas, data, weights, ref_ant):
-    sz = utils.flatsize(Ts)
-    dv = np.zeros((2*nantennas*nantennas*sz,), dtype=np.float) 
-    dvc = weights*(gen_model_disp(v, Ts, Fs, freqs, nantennas, ref_ant) - data.filled(0+0j))
-    for l, (i, j) in enumerate(itertools.product(range(nantennas),
-                                                 range(nantennas))):
-        sr = slice(2*l*sz, (2*l+1)*sz)
-        si = slice((2*l+1)*sz, (2*l+2)*sz)
-        d = np.ndarray.flatten(dvc[i, j])
-        dv[sr] = d.real
-        dv[si] = d.imag
-    return dv
 
 #### End of dispersion-only hacking
 
-def sigma_p(v, Ts, Fs, nantennas, data, weights, ref_ant=None):
-    delta = vector_s3(v, Ts, Fs, nantennas, data, weights, ref_ant)
-    jt = matrix_j_s3(v, Ts, Fs, nantennas, data, weights, ref_ant)
-    n = len(v)
+def sigma_p(param_vec, bl_model, n_ant, data, weights, ref_ant=None):
+    delta = vector_s3_test(param_vec, bl_model, n_ant, data, weights, ref_ant)
+    jt = matrix_j_s3(param_vec, bl_model, n_ant, data, weights, ref_ant)
+    n = len(param_vec)
     ngridpoints = reduce(operator.mul, data.shape[-2:])
-    m = nantennas * (nantennas-1)/2 * ngridpoints
+    m = n_ant * (n_ant-1)/2 * ngridpoints
     inv_w_squared = 1/float(m-n+1) * np.linalg.norm(delta)**2
-    casalog.post("inv_w_squared {} m {}".format(inv_w_squared,  m), "DEBUG")
     cov = np.dot(jt, np.transpose(jt))
     covinv = np.linalg.inv(cov)
     d = np.sqrt(inv_w_squared*np.diag(covinv))
     return d
-
-def minimise_wrapper(fn, v, **kvargs):
-    ref_ant = kvargs['args'][-1]
-    v_dash, refs = param.remove_ref(v, ref_ant)
-    casalog.post("[optimise_wrapper] refs {}".format(refs), "DEBUG")
-    casalog.post("[minimise_wrapper] v_dash {}".format(v_dash), "DEBUG")
-    res_t = scipy.optimize.minimize(fn, v_dash, **kvargs)
-    casalog.post("[minimise_wrapper] res_t".format(res_t), "DEBUG")
-    sol_arr = res_t.x
-    casalog.post("[minimise_wrapper] sol_arr".format(sol_arr), "DEBUG")
-    sol_out = list(sol_arr)
-    sol = param.restore_ref(sol_out, refs, ref_ant)
-    casalog.post("[minimise_wrapper] sol_out".format(sol_out), "DEBUG")
-    casalog.post("[minimise_wrapper] sol".format(sol), "DEBUG")
-    return np.array(sol), res_t
-
-def minimise_wrapper_lm(fn, v, **kvargs):
-    ref_ant = kvargs['args'][-1]
-    v_dash, refs = param.remove_ref(v, ref_ant)
-    res_t = scipy.optimize.leastsq(
-        lsqrs.vector_s3_test, v_dash,
-        full_output=1,
-        args=(anffd.tgrid0/r_scale, anffd.fgrid0/tau_scale,
-              len(antennas2), anffd.data, anffd.weights, ref_antenna),
-        col_deriv = True,
-        Dfun=lsqrs.matrix_j_s3,
-        ftol = 1e-1,
-        maxfev=5
-    )
-    sol_arr = res_t[0]
-    sol_out = list(sol_arr)
-    sol = restore_ref(sol_out, refs, ref_ant)
-    return np.array(sol), res_t
-
-
-if __name__ == '__main__':
-    import numpy as np
-    fs = np.linspace(0, 16e6, 32, False)
-    ts = np.arange(0.0, 60, 2)
-    Ts, Fs = np.meshgrid(ts, fs)
-    params = [2.0, 2e-4, 1.1e-09,
-              1.0, 3e-4, 2.1e-09,
-              0.0, 4e-4, 3.1e-09]
-    data2 = lsqrs.gen_model_s3(params, Ts, Fs, 3)
-    weights = np.ones(data2.shape)
-    lsqrs.minimise_wrapper(lsqrs.fun_s3,
-                           [2.5, 2.0e-4, 1.1e-09,
-                            1.5, 3.5e-4, 3.5e-09,
-                            0.0, 4.0e-4, 3.1e-09],
-                           args=(Ts, Fs, 3, data2*noise_s3, weights, 2), method='TNC', jac=lsqrs.jac_s3,
-                           bounds=[(-10, +10), (-1e-3, 1e-3), (-1e-8, 1e-8),
-                                   (-10, +10), (-1e-3,1e-3), (-1e-8, 1e-8)],
-                           options={'ftol':1e-20})
-    

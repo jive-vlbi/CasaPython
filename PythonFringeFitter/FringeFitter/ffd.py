@@ -684,12 +684,11 @@ These antennas should be removed from the data set before the least-squares algo
             params3b.insert(4*(i+1)-1, d)
         assert (len(params3b) % 4) == 0
         params4, ref_params = param.remove_ref(params3b, new_e_ref_antenna)
-        casalog.post("params3b: {}".format(params3b))
-        casalog.post("params4: {}".format(params4))
-        args=(self.tgrid0, self.fgrid0, self.freqs, n_actual_e_antennas, self.data, self.weights, new_e_ref_antenna)
+        phasor = lsqrs.BaselinePhasorAll(self.tgrid0, self.fgrid0, self.freqs)
+        args=(phasor, n_actual_e_antennas, self.data, self.weights, new_e_ref_antenna)
         casalog.post("Starting least-squares solver", "INFO")
         # Caution! New!
-        eps = 1e-30
+        eps = 1e-12
         sweight = np.sum(self.weights*np.logical_not(self.data.mask))
         ftol = eps*sweight
         casalog.post(
@@ -743,7 +742,8 @@ These antennas should be removed from the data set before the least-squares algo
         for i in range(n_ants-1):
             params[2*i + 0] = ang
             params[2*i + 1] = disp
-        args=(self.tgrid0, self.fgrid0, self.freqs, n_ants, self.data, self.weights, e_ref_antenna)
+        phasor = lsqrs.BaselinePhasorDisp(self.tgrid0, self.fgrid0, self.freqs)
+        args=(phasor, n_ants, self.data, self.weights, e_ref_antenna)
         casalog.post("Starting least-squares solver", "INFO")
         # Caution! New!
         eps = 1e-12
@@ -752,7 +752,7 @@ These antennas should be removed from the data set before the least-squares algo
         casalog.post(
             "Sum of weights {}; error per phasor {}; ftol={}."
             "".format(sweight, eps, ftol))
-        res_t = scipy.optimize.leastsq(lsqrs.vector_disp, params, full_output=1, args=args,
+        res_t = scipy.optimize.leastsq(lsqrs.vector_s3_test, params, full_output=1, args=args,
                                        maxfev=100,
                                        # col_deriv=True,
                                        # Dfun=lsqrs.matrix_j_s3,
@@ -762,7 +762,6 @@ These antennas should be removed from the data set before the least-squares algo
         casalog.post("Least-squares solver finished after {} iterations".format(res_t[2]['nfev']), "INFO")
         # 1 t/m 4 good; others bad.
         casalog.post("Solver status {}, message: {}".format(res_t[4], res_t[3]), "INFO")
-        print "sol_out", sol_out
         pout = np.reshape(np.array(sol_out), (n_ants-1, 2))
         dout = list(pout[:, 1])
         dout.insert(e_ref_antenna, 0.0)
