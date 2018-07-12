@@ -13,25 +13,34 @@ class Phasor(object):
         self.fm = np.max(freqs)
         self.fs = freqs[:, np.newaxis]
         self.dfs = self.fs - self.f0
+    def getPhasorConst(self, dpsi):
+        # Note: this is already in radians
+        phasor_psi = np.exp(-1j*dpsi) # Complex scalar
+        return phasor_psi
     def getPhasorDelay(self, dtau):
         phasor_tau = np.exp(-1j*2*np.pi*dtau*self.dfs) # Complex n-by-1 matrix
         return phasor_tau
-    def getPhasorConst(self, dpsi):
-        phasor_psi = np.exp(-1j*2*np.pi*dpsi) # Complex scalar
-        return phasor_psi
     def getPhasorDisp(self, ddisp):
         ang_disp = ddisp/self.fs + (ddisp/self.f0/self.fm)*self.dfs - ddisp/self.f0
         return np.exp(-1j*2*np.pi*ang_disp)
+
+def DispConstPhasor(Phasor):
+    def __init__(self, freqs):
+        Phasor.__init__(self, freqs)
     def getCorrectionPhasor(self, dpsi, ddisp):
         return self.getPhasorConst(dpsi)*self.getPhasorDisp(ddisp)
     
 class TimePhasor(Phasor):
-    def __init__(self, freqs, dts):
+    def __init__(self, ref_freq, ref_time, freqs, dts):
         Phasor.__init__(self, freqs)
-        self.dts = dts
+        self.ref_time = ref_time
+        self.dts = dts - dts[0]
+        self.ref_freq = ref_freq
     def getPhasorRate(self, dr):
-        phasor_rates = np.exp(-1j*2*np.pi*dr*self.dts) # Complex vector
-        return phasor_rates
+        ph_rots = dr*self.dts*self.ref_freq
+        print -360*ph_rots
+        phasor_rate = np.exp(-1j*2*np.pi*ph_rots) # Complex vector
+        return phasor_rate
     def getCorrectionPhasor(self, dpsi, dtau, dr, ddisp):
         phasor_psi = self.getPhasorConst(dpsi)
         phasor_tau = self.getPhasorDelay(dtau)
@@ -58,18 +67,21 @@ class Applier(object):
 class AllApplier(Applier):
     """Apply calibration"""
     def __init__(self, msname, antenna_list, swid, pol_id,
-                 polind, qrest, ref_time,
+                 polind, qrest, ref_freq, ref_time,
                  phs, dels, rs, disps, datacol="CORRECTED"):
         Applier.__init__(self, msname, antenna_list, swid, pol_id,
-                         polind, qrest, ref_time,
+                         polind, qrest, ref_time, 
                          datacol)
         #
         self.phs = phs
         self.dels = dels
         self.rs = rs
         self.disps = disps
-    def getPhasor(self, freqs, dts):
-        return TimePhasor(freqs, dts)
+        self.ref_freq = ref_freq
+        self.ref_time = ref_time
+        print ref_time
+    def getPhasor(self, ref_freq, ref_time, freqs, dts):
+        return TimePhasor(ref_freq, ref_time, freqs, dts)
     def getParams(self, i, j):
         dpsi = self.phs[j] - self.phs[i]
         dtau = self.dels[j] - self.dels[i]
@@ -90,8 +102,9 @@ class AllApplier(Applier):
             query = ('DATA_DESC_ID = {} AND ANTENNA1={} AND ANTENNA2={}'
                      ' AND {}'.format(self.ddid, s0, s1, self.qrest))
             tbl = tb.query(query)
-            dts = tbl.getcol('TIME') - self.ref_time
-            phasor = self.getPhasor(self.freqs, dts)
+            times = tbl.getcol('TIME')
+            dts = times - self.ref_time
+            phasor = self.getPhasor(self.ref_freq, self.ref_time, self.freqs, dts)
             # We can calculate the corrections due to delay and
             # constant immediately; the rate term requires time.
             params = self.getParams(i, j)

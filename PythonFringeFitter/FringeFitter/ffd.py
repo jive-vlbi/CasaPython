@@ -108,6 +108,10 @@ def divide_up_timerange(msname, timeq, solint, solmin=0, solsub=1, dofloat=True)
         tpairs = times
     qs = map(lambda (t0, t1): "TIME > {} and TIME <= {}".format(t0, t1),
              tpairs)
+    rngs = map(lambda (t0, t1): "From {} to {}".format(utils.render_time(t0),
+                                                       utils.render_time(t1)),
+               tpairs)
+    print >>sys.stderr, "Solution interval ranges:", "\n".join(rngs)
     print >>sys.stderr, "Solution interval queries:", "\n".join(qs)
     return qs
     
@@ -715,18 +719,14 @@ These antennas should be removed from the data set before the least-squares algo
         dels = param.get_delays(pout2d)
         r0s = param.get_rates(pout2d)
         rs = r0s/self.ref_freq
-        phs0 = param.get_phases(pout2d)
+        phs = param.get_phases(pout2d)
         disps = param.get_disps(pout2d)
         sigma_p = param.get_phases(pout2d) 
         casalog.post("All terms: {}".format(pout2d), "INFO")
+        casalog.post("Constant term: {}".format(phs), "INFO")
         casalog.post("Delay terms: {}".format(dels), "INFO")
         casalog.post("Rate terms: {}".format(rs), "INFO")
         casalog.post("Dispersive terms: {}".format(disps), "INFO")
-        DT = self.tgrid0[0, -1]
-        # phs = +np.array(phs0) + np.pi*DT*np.array(r0s)
-        # We do NOT correct anything here; leave that to the writer.
-        phs = np.array(phs0) 
-        # + 2*np.pi*F_midpoint*np.array(dels)
         self.flags = flags
         self.dels = dels
         self.phs = phs
